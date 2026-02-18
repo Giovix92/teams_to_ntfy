@@ -333,26 +333,46 @@ def looks_like_teams_origin(meta: str, payload_xml: str) -> bool:
     return contains_any(blob, TEAMS_ORIGINS)
 
 
-def is_mention(message: str) -> bool:
-    txt = (message or "").lower()
+def is_meeting_call(sender: str, message: str) -> bool:
+    """Returns True if the sender or message indicates a meeting/call notification."""
+    txt = ((sender or "") + " " + (message or "")).lower()
     return (
-        " mentioned " in txt
-        or " mentioned you" in txt
-        or "menzion" in txt  # Italian locale: "menzionato"
-        or re.search(r"\s@\w+", txt) is not None
+        "ha avviato la riunione" in txt     # Italian: "started the meeting"
+        or "started the meeting" in txt
+        or "started a call" in txt
+        or "ha avviato la chiamata" in txt  # Italian: "started a call"
     )
 
 
-def priority_for(message: str) -> str:
-    return "urgent" if is_mention(message) else "default"
+def is_mention(sender: str, message: str) -> bool:
+    """Returns True if the sender or message contains a mention of the user."""
+    txt = ((sender or "") + " " + (message or "")).lower()
+    return (
+        " mentioned " in txt
+        or " mentioned you" in txt
+        or "menzion" in txt             # Italian: "menzionato", "menzionata", etc.
+        or "@menzion" in txt            # Italian: "@menzionato" at start of message
+        or re.search(r"@\w+", txt) is not None  # any @mention anywhere
+    )
 
 
-def tags_for(message: str) -> str:
+def priority_for(sender: str, message: str) -> str:
+    """Returns 'urgent' for calls/meetings or mentions, 'default' otherwise."""
+    return "urgent" if is_meeting_call(sender, message) or is_mention(sender, message) else "default"
+
+
+def tags_for(sender: str, message: str) -> str:
     # Comma-separated Tags header value.
     # ntfy converts recognised short codes to emoji prepended to the title:
+    #   "phone"          -> 📞  (meeting/call started)
     #   "bell"           -> 🔔  (mention)
     #   "speech_balloon" -> 💬  (regular message)
-    emoji_tag = "bell" if is_mention(message) else "speech_balloon"
+    if is_meeting_call(sender, message):
+        emoji_tag = "phone"
+    elif is_mention(sender, message):
+        emoji_tag = "bell"
+    else:
+        emoji_tag = "speech_balloon"
     return f"{TAG},{emoji_tag}"
 
 
@@ -374,8 +394,8 @@ def send_ntfy(sender: str, message: str, retries: int = 4) -> None:
     body = f"[{sender}] {message}"[:_NTFY_MAX_MESSAGE].encode("utf-8")
     headers = {
         "Title":    TITLE[:_NTFY_MAX_TITLE],
-        "Priority": priority_for(message),
-        "Tags":     tags_for(message),
+        "Priority": priority_for(sender, message),
+        "Tags":     tags_for(sender, message),
     }
 
     for attempt in range(retries):
