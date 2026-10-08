@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Teams → ntfy — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Teams → ntfy</h1>
+      <p class="sub">
+        Intercepts Microsoft Teams Web notifications in the browser and forwards them to your ntfy topic.
+      </p>
+
+      <section>
+        <label>
+          <span>ntfy topic URL</span>
+          <input id="ntfyUrl" type="url" placeholder="https://ntfy.sh/your_topic" spellcheck="false" />
+          <small>Full URL including the topic name. Self-hosted servers are supported.</small>
+        </label>
+
+        <label>
+          <span>Notification title</span>
+          <input id="title" type="text" placeholder="Lutech - Teams" />
+        </label>
+
+        <label>
+          <span>Tag</span>
+          <input id="tag" type="text" placeholder="teams" spellcheck="false" />
+          <small>Plain-text tag shown below the notification. An emoji tag is added automatically.</small>
+        </label>
+
+        <label>
+          <span>Access token <em>(optional)</em></span>
+          <input id="token" type="password" placeholder="tk_… for protected topics" spellcheck="false" />
+        </label>
+
+        <label>
+          <span>Duplicate suppression (seconds)</span>
+          <input id="dedupTtl" type="number" min="0" max="3600" step="1" />
+        </label>
+
+        <label class="check">
+          <input id="enabled" type="checkbox" />
+          <span>Forward notifications</span>
+        </label>
+
+        <label class="check">
+          <input id="domFallback" type="checkbox" />
+          <span>
+            Also watch Teams' built-in in-app toasts
+            <small>Needed when Teams' notification style is set to “Teams built-in” instead of “Browser”.</small>
+          </span>
+        </label>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary">Save</button>
+        <button id="test">Send test notification</button>
+        <span id="status" role="status"></span>
+      </div>
+
+      <section>
+        <h2>Recent activity</h2>
+        <div id="log" class="log"><p class="empty">Nothing yet.</p></div>
+        <button id="clearLog" class="link">Clear</button>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

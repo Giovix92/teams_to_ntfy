@@ -18,10 +18,10 @@ from urllib3.util.retry import Retry
 
 # ================= CONFIG =================
 # Your ntfy topic URL
-NTFY_URL = "https://ntfy.sh/YOUR_TOPIC"
+NTFY_URL = "https://ntfy.sh/giovix92_teams_lutech"
 
 # Notification title
-TITLE = "YOUR_TITLE"
+TITLE = "Lutech - Teams"
 
 # Plain-text tag shown below the notification (not an emoji short code)
 TAG = "teams"
@@ -50,11 +50,37 @@ BLOCKLIST_HANDLER_IDS: Set[int] = {
 }
 
 # Teams-related constants
+# Microsoft is migrating Teams Web from teams.microsoft.com to the new
+# teams.cloud.microsoft domain. Each origin gets its own Windows notification
+# handler, so every origin must be recognised or its handler is never learned
+# and its notifications are silently discarded.
+# Bare hostnames; add your own here if your tenant uses another origin.
 TEAMS_ORIGINS = [
-    "https://teams.microsoft.com/",
     "teams.microsoft.com",
+    "teams.cloud.microsoft",
     "teams.live.com",
 ]
+
+# A host must end at a real boundary, otherwise a lookalike URL such as
+# https://example.com/teams.microsoft.com.evil/ would be treated as Teams and
+# that site's notifications would be forwarded to your ntfy topic.
+_HOST_END = r"(?=[/:?#\s\"'|]|$)"
+
+TEAMS_ORIGIN_RE = re.compile(
+    r"https?://(?:[\w-]+\.)*(?:"
+    + "|".join(re.escape(h) for h in TEAMS_ORIGINS)
+    + r")"
+    + _HOST_END,
+    re.IGNORECASE,
+)
+
+# Catch-all for future Teams origins (e.g. another *.cloud.microsoft rename).
+# Matches a browser handler whose site URL is a "teams*" host on a Microsoft
+# domain, so a migration is picked up automatically instead of going silent.
+TEAMS_HOST_RE = re.compile(
+    r"https?://teams[\w-]*\.(?:microsoft\.com|cloud\.microsoft|live\.com)" + _HOST_END,
+    re.IGNORECASE,
+)
 
 # Hints that a notification handler is browser-based (Edge running Teams web)
 BROWSER_HINTS = ["microsoftedge", "msedge", "edge", "chrome"]
@@ -91,7 +117,6 @@ STATE_FILE = Path(__file__).with_name("toast_state.txt")
 DB_DIR = Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "Windows" / "Notifications"
 DB_MAIN = DB_DIR / "wpndatabase.db"
 DB_WAL = DB_DIR / "wpndatabase.db-wal"
-DB_SHM = DB_DIR / "wpndatabase.db-shm"
 
 TMP_DIR = Path(os.environ["TEMP"]) / "toast_ntfy_tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -121,8 +146,6 @@ _session: requests.Session | None = None
 
 def _make_session() -> requests.Session:
     s = requests.Session()
-    # urllib3-level retry for transient TCP/SSL failures before they reach our
-    # application retry loop. Does not auto-retry on any HTTP status codes.
     retry = Retry(
         total=3,
         backoff_factor=1.5,
@@ -146,8 +169,6 @@ def get_session() -> requests.Session:
 
 
 def reset_session() -> None:
-    """Close and discard the current session so the next call to get_session()
-    opens a completely fresh TCP+TLS connection."""
     global _session
     if _session is not None:
         try:
@@ -190,7 +211,6 @@ def save_learned_handlers(handler_ids: List[int]) -> None:
 
 
 # ---------- deduplication cache ----------
-# Maps sha256(sender+message) -> expiry timestamp (monotonic)
 _dedup_cache: Dict[str, float] = {}
 
 
@@ -202,11 +222,9 @@ def is_duplicate(sender: str, message: str) -> bool:
     key = _dedup_key(sender, message)
     now = time.monotonic()
 
-    # Evict expired entries
     for k in [k for k, exp in _dedup_cache.items() if exp <= now]:
         del _dedup_cache[k]
 
-    # Trim to size limit (oldest expiry first)
     while len(_dedup_cache) >= DEDUP_CACHE_SIZE:
         del _dedup_cache[min(_dedup_cache, key=lambda k: _dedup_cache[k])]
 
@@ -257,10 +275,15 @@ def copy_db_snapshot() -> Path:
     if not safe_copy(DB_MAIN, snap):
         raise OSError("Could not snapshot wpndatabase.db (locked too long)")
 
+    # Copy the WAL, but never the -shm. The shared-memory index belongs to the
+    # live writer process; SQLite's own docs call copying it unsafe. With no
+    # -shm present SQLite recovers the WAL itself, which is always correct.
+    snap_wal = Path(str(snap) + "-wal")
+    snap_shm = Path(str(snap) + "-shm")
+    snap_shm.unlink(missing_ok=True)
+
     if DB_WAL.exists():
-        safe_copy(DB_WAL, Path(str(snap) + "-wal"))
-    if DB_SHM.exists():
-        safe_copy(DB_SHM, Path(str(snap) + "-shm"))
+        safe_copy(DB_WAL, snap_wal)
 
     cleanup_old_snaps()
     return snap
@@ -328,45 +351,44 @@ def is_browserish(meta: str, payload_xml: str) -> bool:
     return contains_any(meta, BROWSER_HINTS) or contains_any(payload_xml, BROWSER_HINTS)
 
 
+# Browser handlers we have already warned about, so the log is not spammed.
+_warned_handlers: Set[int] = set()
+
+
 def looks_like_teams_origin(meta: str, payload_xml: str) -> bool:
     blob = (meta or "") + " " + (payload_xml or "")
-    return contains_any(blob, TEAMS_ORIGINS)
+    return (
+        TEAMS_ORIGIN_RE.search(blob) is not None
+        or TEAMS_HOST_RE.search(blob) is not None
+    )
 
 
 def is_meeting_call(sender: str, message: str) -> bool:
-    """Returns True if the sender or message indicates a meeting/call notification."""
     txt = ((sender or "") + " " + (message or "")).lower()
     return (
-        "ha avviato la riunione" in txt     # Italian: "started the meeting"
+        "ha avviato la riunione" in txt
         or "started the meeting" in txt
         or "started a call" in txt
-        or "ha avviato la chiamata" in txt  # Italian: "started a call"
+        or "ha avviato la chiamata" in txt
     )
 
 
 def is_mention(sender: str, message: str) -> bool:
-    """Returns True if the sender or message contains a mention of the user."""
     txt = ((sender or "") + " " + (message or "")).lower()
     return (
         " mentioned " in txt
         or " mentioned you" in txt
-        or "menzion" in txt             # Italian: "menzionato", "menzionata", etc.
-        or "@menzion" in txt            # Italian: "@menzionato" at start of message
-        or re.search(r"@\w+", txt) is not None  # any @mention anywhere
+        or "menzion" in txt
+        or "@menzion" in txt
+        or re.search(r"@\w+", txt) is not None
     )
 
 
 def priority_for(sender: str, message: str) -> str:
-    """Returns 'urgent' for calls/meetings or mentions, 'default' otherwise."""
     return "urgent" if is_meeting_call(sender, message) or is_mention(sender, message) else "default"
 
 
 def tags_for(sender: str, message: str) -> str:
-    # Comma-separated Tags header value.
-    # ntfy converts recognised short codes to emoji prepended to the title:
-    #   "phone"          -> 📞  (meeting/call started)
-    #   "bell"           -> 🔔  (mention)
-    #   "speech_balloon" -> 💬  (regular message)
     if is_meeting_call(sender, message):
         emoji_tag = "phone"
     elif is_mention(sender, message):
@@ -408,10 +430,6 @@ def send_ntfy(sender: str, message: str, retries: int = 4) -> None:
             return
 
         except requests.exceptions.SSLError:
-            # Server dropped the connection (stale keep-alive or rate limiting).
-            # Reset so the next attempt gets a fresh socket.
-            # NOTE: this is a known ntfy.sh behaviour when requests arrive too
-            # quickly. The script will recover automatically on the next attempt.
             reset_session()
             if attempt == retries - 1:
                 raise
@@ -509,15 +527,13 @@ def main() -> None:
                 nid = int(nid)
                 hid = int(hid)
 
-                # Advance cursor before anything else so a crash mid-batch
-                # doesn't replay already-processed rows on the next run
-                if nid > last_id:
-                    last_id = nid
-                    save_last_id(last_id)
-
-                # Skip known-noisy handlers immediately
+                # Skip known-noisy handlers immediately.
+                # Still advance last_id so we don't re-examine them next poll.
                 if hid in BLOCKLIST_HANDLER_IDS:
                     log.debug("Skipping blocklisted handler %d (id=%d)", hid, nid)
+                    if nid > last_id:
+                        last_id = nid
+                        save_last_id(last_id)
                     continue
 
                 payload_xml = normalize_text(payload)
@@ -534,15 +550,35 @@ def main() -> None:
                     log.info("Learned new Teams handler id: %d | %s", hid, meta[:120])
 
                 if hid not in learned_ids:
+                    # Not a Teams handler — advance past it silently.
+                    # A browser handler we failed to recognise is worth shouting
+                    # about: that is exactly how a Teams domain migration turns
+                    # into silently dropped notifications.
+                    if is_browserish(meta, payload_xml) and hid not in _warned_handlers:
+                        _warned_handlers.add(hid)
+                        log.warning(
+                            "Unrecognised browser notification handler %d — its notifications "
+                            "are being skipped. If this is Teams on a new domain, add that "
+                            "origin to TEAMS_ORIGINS. Handler: %s",
+                            hid, meta[:160],
+                        )
+                    if nid > last_id:
+                        last_id = nid
+                        save_last_id(last_id)
                     continue
 
-                # During startup drain, skip notifications older than the cutoff
+                # During startup drain, skip notifications older than the cutoff.
+                # We still advance last_id so they aren't replayed on the next restart,
+                # but we do NOT forward them to ntfy.
                 if startup_drain and startup_cutoff > 0 and arrival_time:
                     try:
                         # ArrivalTime is Windows FILETIME: 100-ns ticks since 1601-01-01
                         unix_ts = (int(arrival_time) - 116444736000000000) / 10000000
                         if unix_ts < startup_cutoff:
                             log.debug("Startup: skipping stale notification id=%d", nid)
+                            if nid > last_id:
+                                last_id = nid
+                                save_last_id(last_id)
                             continue
                     except Exception:
                         pass  # unparseable timestamp — send it anyway
@@ -551,13 +587,26 @@ def main() -> None:
                 sender, msg = pick_sender_and_message(text_nodes)
 
                 if not msg or msg == "(no preview)":
+                    if nid > last_id:
+                        last_id = nid
+                        save_last_id(last_id)
                     continue
 
                 if is_duplicate(sender, msg):
                     log.debug("Suppressed duplicate: [%s] %s", sender, msg[:80])
+                    if nid > last_id:
+                        last_id = nid
+                        save_last_id(last_id)
                     continue
 
                 send_ntfy(sender, msg)
+
+                # Advance cursor only after the message has been successfully sent
+                # (or deliberately skipped). A crash inside send_ntfy will leave
+                # last_id pointing before this row so it retries on the next run.
+                if nid > last_id:
+                    last_id = nid
+                    save_last_id(last_id)
 
             if startup_drain:
                 startup_drain = False
@@ -581,7 +630,6 @@ def main() -> None:
                 )
                 raise SystemExit(1)
 
-            # Exponential backoff, capped at 30s
             wait = min(2 ** min(consecutive_errors, 5), 30)
             time.sleep(wait)
 

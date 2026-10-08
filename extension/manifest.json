@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Teams \u2192 ntfy",
+  "version": "1.0.0",
+  "description": "Intercepts Microsoft Teams Web notifications and forwards them to an ntfy topic.",
+  "minimum_chrome_version": "111",
+
+  "permissions": ["storage"],
+
+  "host_permissions": ["https://ntfy.sh/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "Teams \u2192 ntfy (click for settings)"
+  },
+
+  "commands": {
+    "open-settings": {
+      "suggested_key": { "default": "Ctrl+Shift+Y" },
+      "description": "Open Teams \u2192 ntfy settings"
+    }
+  },
+
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://*.teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://*.teams.live.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/*"
+      ],
+      "js": ["hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://*.teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://*.teams.live.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/*"
+      ],
+      "js": ["content.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

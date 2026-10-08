@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Runtime state written by teams_to_ntfy.py
+toast_state.txt
+learned_teams_handlers.json
